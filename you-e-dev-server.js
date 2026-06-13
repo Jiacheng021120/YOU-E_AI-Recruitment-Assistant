@@ -173,6 +173,7 @@ function normalizeProfile(profile) {
 async function buildProfileWithDeepSeek(resumeText, filename) {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   const model = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+  const baseUrl = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
   if (!apiKey || apiKey === "__REDACTED__") throw new Error("未配置 DeepSeek API Key。");
 
   const schema = `{
@@ -194,7 +195,7 @@ async function buildProfileWithDeepSeek(resumeText, filename) {
   "recommendedJobs": [{"id":"j1|j2|j3|j4|j5","title":"string","department":"string","matchLevel":"高|较高|中等|较低","reason":"string"}]
 }`;
 
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -247,6 +248,7 @@ async function handleDeepSeek(req, res) {
     const context = typeof parsed.context === "string" ? parsed.context : "YOU鹅 AI 全流程招聘助手";
     const apiKey = process.env.DEEPSEEK_API_KEY;
     const model = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+    const baseUrl = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 
     if (!apiKey || apiKey === "__REDACTED__") {
       send(res, 200, JSON.stringify({ text: mockAnswer(prompt) }), "application/json; charset=utf-8");
@@ -254,7 +256,7 @@ async function handleDeepSeek(req, res) {
     }
 
     try {
-      const response = await fetch("https://api.deepseek.com/chat/completions", {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

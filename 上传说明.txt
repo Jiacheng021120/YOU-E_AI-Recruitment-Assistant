@@ -1,0 +1,16 @@
+﻿这份压缩包只包含本次需要覆盖上传到 GitHub 的更新文件。
+
+使用方式：
+1. 解压本 ZIP。
+2. 将里面的文件按相同目录覆盖到你的 GitHub 仓库项目根目录。
+3. 不要上传 .env.local、node_modules、.next。
+4. Vercel 部署时，在 Project Settings -> Environment Variables 配置：
+   DEEPSEEK_API_KEY=你的 DeepSeek Key
+   DEEPSEEK_BASE_URL=https://api.deepseek.com
+   DEEPSEEK_MODEL=deepseek-chat
+5. 保存环境变量后重新 Redeploy。
+
+注意：
+- next.config.mjs 已调整为 Vercel API Route 可运行模式。
+- 前端只会请求 /api/deepseek，不会暴露 DeepSeek API Key。
+- app/api/parse-resume/route.ts 用于 Vercel 上的真实简历解析。
