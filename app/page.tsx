@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { AppState, Candidate, CandidateProfile, Interviewer, Job, Role, Stage, hasActiveInterviewProcess, initialState, mockAIResponse, modelName, parseResumeMock, personaCols, personaFromScores, personaMatrix, personaRows, personaSpecies, stageLabel, stages } from "@/lib/mock";
+import { AppState, Candidate, CandidateProfile, Interviewer, Job, Role, Stage, generateRandomCandidateProfile, hasActiveInterviewProcess, initialState, mockAIResponse, modelName, personaCols, personaFromScores, personaMatrix, personaRows, personaSpecies, stageLabel, stages } from "@/lib/mock";
 import { getPersonaAsset } from "@/lib/personaAssets";
 import { interviewerPool } from "@/data/interviewers";
 import type { Interviewer as BusinessInterviewer, ScheduledInterview } from "@/data/interviewers";
@@ -39,7 +39,6 @@ export default function Home() {
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [modal, setModal] = useState<AppModal | null>(null);
   const [candidateProfile, setCandidateProfile] = useState<CandidateProfile | null>(null);
-  const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumeText, setResumeText] = useState("");
   const [aiStatus, setAiStatus] = useState<AiStatusMap>(defaultAiStatus);
   const [businessInterviewers, setBusinessInterviewers] = useState<BusinessInterviewer[]>(interviewerPool);
@@ -393,18 +392,6 @@ export default function Home() {
     setModal({ type: "info", text: `AI 选择了 ${picked.map((candidate) => candidate.name).join("、")}。理由：鹅值高，或鹅值高且鸽值高需要抢救，适合先进入业务评估。` });
   }
 
-  function handleResumeUpload(file: File) {
-    const uploadedAt = new Date().toLocaleString("zh-CN", { hour12: false });
-    setResumeFile(file);
-    setCandidateProfile(null);
-    localStorage.removeItem(candidateProfileStorageKey);
-    updateCandidate("c1", {
-      resumeFileName: file.name,
-      resumeUploadedAt: uploadedAt,
-      resumeAnalysisStatus: "not_uploaded"
-    }, `候选人上传简历：${file.name}，等待开始解析。`);
-  }
-
   function applyProfileToCandidate(profile: CandidateProfile, fileName?: string) {
     const primaryJob = profile.recommendedJobs[0];
     const applicationType = (profile as CandidateProfile & { applicationType?: Candidate["applicationType"] }).applicationType ?? "日常实习";
@@ -447,70 +434,49 @@ export default function Home() {
   }
 
   async function startResumeParse() {
-    const candidate = state.candidates.find((item) => item.id === "c1") ?? state.candidates[0];
     const pastedText = resumeText.trim();
-    const fileName = candidate.resumeFileName ?? "粘贴简历文本";
-    if (!resumeFile && pastedText.length < 20) {
-      updateCandidate("c1", { resumeAnalysisStatus: "failed" }, "简历解析失败：没有可解析的文件或粘贴文本。");
-      setModal({ type: "info", text: "请上传可复制文字的 PDF/DOCX，或直接粘贴简历文本后再点击“开始解析”。" });
+    if (!pastedText) {
+      setModal({ type: "info", text: "请先粘贴简历文本，或点击「随机生成模拟履历」体验功能。" });
       return;
     }
-    updateCandidate("c1", { resumeAnalysisStatus: "analyzing" }, `YOU鹅 开始调用 DeepSeek 解析 ${fileName}。`);
+    updateCandidate("c1", { resumeAnalysisStatus: "analyzing" }, "YOU鹅 开始调用 DeepSeek 解析粘贴简历文本。");
     try {
-      let data: { profile?: CandidateProfile };
-      if (pastedText.length >= 20) {
-        data = await callDeepSeekRoute<{ profile: CandidateProfile }>("/api/resume/analyze", {
-          fileName,
-          resumeText: pastedText,
-          targetJobs: state.jobs.map(({ id, title, department, jd, requiredSkills }) => ({ id, title, department, jd, requiredSkills }))
-        });
-      } else {
-        const formData = new FormData();
-        formData.append("resume", resumeFile as File);
-        const response = await fetch("/api/parse-resume", {
-          method: "POST",
-          body: formData
-        });
-        data = await response.json();
-        if (!response.ok) {
-          throw new Error((data as { error?: string; message?: string }).message || (data as { error?: string }).error || "真实解析失败，请确认文件是可复制文字的 PDF/DOCX。");
-        }
-      }
+      const data = await callDeepSeekRoute<{ profile: CandidateProfile; source?: "deepseek" | "mock"; warning?: string }>("/api/resume/analyze", {
+        resumeText: pastedText,
+        targetJobs: state.jobs.map(({ id, title, department, jd, requiredSkills }) => ({ id, title, department, jd, requiredSkills }))
+      });
       if (!data.profile) throw new Error("DeepSeek 没有返回结构化简历结果。");
       const profile = data.profile as CandidateProfile;
       setCandidateProfile(profile);
-      applyProfileToCandidate(profile, fileName);
-      markAiSource("简历解析", "deepseek");
-      markAiSource("岗位推荐", "deepseek");
+      applyProfileToCandidate(profile, "粘贴简历文本");
+      const source = data.source === "mock" ? "mock" : "deepseek";
+      markAiSource("简历解析", source);
+      markAiSource("岗位推荐", source);
+      if (data.warning) setModal({ type: "info", text: data.warning });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "真实解析失败，请重新上传。";
+      const message = error instanceof Error ? error.message : "真实解析失败，请稍后重试。";
       markAiSource("简历解析", "mock");
       markAiSource("岗位推荐", "mock");
       updateCandidate("c1", { resumeAnalysisStatus: "failed" }, `真实解析失败：${message}`);
-      setModal({ type: "info", text: `${deepSeekFallbackNotice}\n\n解析失败原因：${message}\n\n建议：上传可复制文字的 PDF/DOCX，或把简历正文粘贴到输入框；也可以点击“使用示例简历测试”验证功能链路。` });
+      setModal({ type: "info", text: `${deepSeekFallbackNotice}\n\n解析失败原因：${message}\n\n你也可以点击「随机生成模拟履历」体验后续招聘流程。` });
     }
   }
 
   function applyCandidateProfile() {
-    const candidate = state.candidates.find((item) => item.id === "c1") ?? state.candidates[0];
-    if (candidateProfile) applyProfileToCandidate(candidateProfile, candidate.resumeFileName);
+    if (candidateProfile) applyProfileToCandidate(candidateProfile, "已解析履历");
   }
 
   function useDemoResumeProfile() {
-    const demoFiles = ["产品运营示例简历.pdf", "data-analysis-demo-resume.pdf", "frontend-react-demo-resume.pdf"];
-    const fileName = demoFiles[Math.floor(Math.random() * demoFiles.length)];
-    const profile = parseResumeMock(fileName);
-    const uploadedAt = new Date().toLocaleString("zh-CN", { hour12: false });
-    setResumeFile(null);
+    const profile = generateRandomCandidateProfile();
     setCandidateProfile(profile);
     markAiSource("简历解析", "mock");
     markAiSource("岗位推荐", "mock");
     updateCandidate("c1", {
-      resumeFileName: `示例简历测试 - ${fileName}`,
-      resumeUploadedAt: uploadedAt,
+      resumeFileName: "随机生成模拟履历",
       resumeAnalysisStatus: "completed"
-    }, `候选人使用示例简历测试：${fileName}。`);
-    applyProfileToCandidate(profile, `示例简历测试 - ${fileName}`);
+    }, "已为候选人生成一份模拟履历，可用于体验后续招聘流程。");
+    applyProfileToCandidate(profile, "随机生成模拟履历");
+    setModal({ type: "info", text: "已为你生成一份模拟履历，可用于体验后续招聘流程。" });
   }
 
   function chooseActiveJob(jobId: string) {
@@ -528,7 +494,7 @@ export default function Home() {
     const resumeAnalysis = candidateUser.resumeAnalysis;
     const needsResume = role === "candidate" && ["简历", "岗位", "准备", "亮点", "优化"].some((word) => text.includes(word));
     if (needsResume && !candidateProfile) {
-      setChat((items) => [...items, { from: "user", text }, { from: "ai", text: "请先在左侧「解析简历」中上传简历，我会根据你的履历帮你分析岗位匹配和优化建议。" }]);
+      setChat((items) => [...items, { from: "user", text }, { from: "ai", text: "请先在「解析简历」中粘贴简历文本进行解析，或随机生成一份模拟履历。" }]);
       return;
     }
 
@@ -550,7 +516,7 @@ export default function Home() {
         ? "建议按项目背景、岗位理解、数据复盘、协作冲突、风险确认五类准备，每类准备一个 STAR 案例。"
         : text.includes("简历")
           ? "可以把经历改写成动作 + 指标 + 结果，例如：独立搭建活动复盘看板，使转化分析时间减少 40%。"
-          : "你的流程正在推进中。你可以查看当前阶段、下一步安排，也可以上传简历获取岗位方向和面试准备建议。");
+          : "你的流程正在推进中。你可以查看当前阶段、下一步安排，也可以粘贴简历文本获取岗位方向和面试准备建议。");
     setChat((items) => [...items, { from: "user", text }, { from: "ai", text: "YOU鹅 正在调用 DeepSeek V4..." }]);
 
     try {
@@ -604,7 +570,6 @@ export default function Home() {
               resumeText={resumeText}
               chat={chat}
               sendChat={sendChat}
-              onResumeUpload={handleResumeUpload}
               onResumeTextChange={setResumeText}
               onStartResumeParse={startResumeParse}
               onApplyCandidateProfile={applyCandidateProfile}
@@ -665,7 +630,7 @@ export default function Home() {
 
 function RoleSelect({ onSelect }: { onSelect: (role: Role) => void }) {
   const roles = [
-    { id: "candidate" as Role, title: "候选人", body: "查看投递进度、上传简历、管理面试与获取 AI 准备建议", icon: "候" },
+    { id: "candidate" as Role, title: "候选人", body: "查看投递进度、解析简历、管理面试与获取 AI 准备建议", icon: "候" },
     { id: "hr" as Role, title: "HR", body: "管理人才库、评估推进、一键约面改面与招聘数据监控", icon: "HR" },
     { id: "business" as Role, title: "业务方", body: "评估候选人、管理面试、提交面评并查看团队动态数据", icon: "业" }
   ];
@@ -735,7 +700,7 @@ function Sidebar({ role, active, menus, disabledMenus = [], onDisabledClick, onC
 
 function Header({ role, active, notifications }: { role: Role; active: string; notifications: string[] }) {
   const visibleNotifications = role === "candidate"
-    ? ["你的流程正在推进中，下一步安排会在当前流程页同步。", "上传简历后，YOU鹅 会帮你整理岗位方向和准备建议。", "面试前可以在 AI 助手中生成模拟问答和准备清单。"]
+    ? ["你的流程正在推进中，下一步安排会在当前流程页同步。", "完成简历解析后，YOU鹅 会帮你整理岗位方向和准备建议。", "面试前可以在 AI 助手中生成模拟问答和准备清单。"]
     : notifications;
   return (
     <header className="mb-6 grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm xl:grid-cols-[1fr_420px]">
@@ -760,7 +725,6 @@ function CandidateWorkspace(props: {
   resumeText: string;
   chat: { from: string; text: string }[];
   sendChat: (text: string) => void | Promise<void>;
-  onResumeUpload: (file: File) => void;
   onResumeTextChange: (value: string) => void;
   onStartResumeParse: () => void;
   onApplyCandidateProfile: () => void;
@@ -784,7 +748,6 @@ function CandidateWorkspace(props: {
         candidate={activeCandidate}
         profile={props.candidateProfile}
         resumeText={props.resumeText}
-        onResumeUpload={props.onResumeUpload}
         onResumeTextChange={props.onResumeTextChange}
         onStartResumeParse={props.onStartResumeParse}
         onApplyCandidateProfile={props.onApplyCandidateProfile}
@@ -797,8 +760,8 @@ function CandidateWorkspace(props: {
     if (!props.candidateProfile) {
       return (
         <div className="quest-card p-8 text-center">
-          <h2 className="text-2xl font-black text-slate-900">请先上传并解析简历</h2>
-          <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-500">系统会根据你的履历生成面试准备建议，并同步到面试中心。</p>
+          <h2 className="text-2xl font-black text-slate-900">请先完成简历解析</h2>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-500">请在「解析简历」中粘贴简历文本，或随机生成模拟履历，系统会据此生成面试准备建议。</p>
         </div>
       );
     }
@@ -834,7 +797,7 @@ function CandidateWorkspace(props: {
           ) : (
             <div className="quest-card p-8 text-center">
               <h2 className="text-2xl font-black">当前暂无已确认面试</h2>
-              <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-500">你可以先上传简历，YOU鹅 会帮你分析更适合的岗位方向，并生成面试准备建议。</p>
+              <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-500">你可以先完成简历解析，YOU鹅 会帮你分析更适合的岗位方向，并生成面试准备建议。</p>
             </div>
           )}
         </div>
@@ -852,8 +815,8 @@ function CandidateWorkspace(props: {
   if (!props.candidateProfile) {
     return (
       <div className="quest-card p-8 text-center">
-        <h2 className="text-2xl font-black text-slate-900">你还没有上传简历</h2>
-        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-500">请先完成简历解析，AI 将根据你的履历推荐适合岗位。</p>
+        <h2 className="text-2xl font-black text-slate-900">你还没有完成简历解析</h2>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-500">请先粘贴简历文本进行解析，或随机生成一份模拟履历体验功能。</p>
         <button className="task-button mt-5" onClick={props.onGoParse}>去解析简历</button>
       </div>
     );
@@ -918,7 +881,6 @@ function ResumeParserPage({
   candidate,
   profile,
   resumeText,
-  onResumeUpload,
   onResumeTextChange,
   onStartResumeParse,
   onApplyCandidateProfile,
@@ -927,19 +889,12 @@ function ResumeParserPage({
   candidate: Candidate;
   profile: CandidateProfile | null;
   resumeText: string;
-  onResumeUpload: (file: File) => void;
   onResumeTextChange: (value: string) => void;
   onStartResumeParse: () => void;
   onApplyCandidateProfile: () => void;
   onUseDemoProfile: () => void;
 }) {
-  const statusText: Record<Candidate["resumeAnalysisStatus"], string> = {
-    not_uploaded: candidate.resumeFileName ? "未解析" : "未上传",
-    analyzing: "AI 解析中",
-    completed: profile ? "解析完成" : "未解析",
-    failed: "解析失败，请重新上传"
-  };
-  const canStart = (Boolean(candidate.resumeFileName) || resumeText.trim().length >= 20) && candidate.resumeAnalysisStatus !== "analyzing";
+  const isParsing = candidate.resumeAnalysisStatus === "analyzing";
   return (
     <section className="space-y-5">
       <div className="quest-card p-6">
@@ -947,42 +902,24 @@ function ResumeParserPage({
           <div>
             <h2 className="text-3xl font-black text-slate-900">解析简历</h2>
             <p className="mt-3 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
-              上传可复制文字的 PDF / DOCX，或直接粘贴简历文本。DeepSeek 将自动识别教育背景、实习经历、项目经历、技能标签，并生成岗位匹配建议。
+              请粘贴你的简历文本，AI 将根据内容分析教育背景、实习经历、项目经历、技能标签，并生成岗位匹配建议。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <label className="ghost-button cursor-pointer">
-              {candidate.resumeFileName ? "重新上传" : "上传简历"}
-              <input
-                type="file"
-              accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) onResumeUpload(file);
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
-            <button className="task-button" disabled={!canStart} onClick={onStartResumeParse}>开始解析</button>
-            <button className="ghost-button" onClick={onUseDemoProfile}>使用示例简历测试</button>
+            <button className="task-button" disabled={isParsing} onClick={onStartResumeParse}>AI 解析简历</button>
+            <button className="ghost-button" disabled={isParsing} onClick={onUseDemoProfile}>随机生成模拟履历</button>
             <button className="ghost-button" disabled={!profile} onClick={onApplyCandidateProfile}>应用到我的资料</button>
           </div>
-        </div>
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
-          <InfoPanel title="文件名" text={candidate.resumeFileName ?? "暂未上传"} />
-          <InfoPanel title="上传时间" text={candidate.resumeUploadedAt ?? "未上传"} />
-          <InfoPanel title="解析状态" text={statusText[candidate.resumeAnalysisStatus ?? "not_uploaded"]} />
         </div>
         <div className="mt-5">
           <div className="mb-2 text-sm font-black text-slate-800">粘贴简历文本</div>
           <textarea
             value={resumeText}
             onChange={(event) => onResumeTextChange(event.target.value)}
-            placeholder="如果 PDF/DOCX 无法提取真实文字，请把可复制的简历正文粘贴在这里。正式解析会优先使用这里的文本调用 DeepSeek。"
-            className="min-h-36 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+            placeholder="请粘贴你的简历文本，例如：教育经历、实习经历、项目经历、技能、求职方向……"
+            className="min-h-56 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
           />
-          <p className="mt-2 text-xs font-bold text-slate-500">不上传可复制文本也可以点击“使用示例简历测试”体验完整流程；该入口会标记为 Mock。</p>
+          <p className="mt-2 text-xs font-bold text-slate-500">没有真实简历文本时，可以点击“随机生成模拟履历”体验后续招聘流程。</p>
         </div>
         {candidate.resumeAnalysisStatus === "analyzing" && <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm font-bold text-blue-700">DeepSeek 正在解析简历……</div>}
       </div>
@@ -1051,7 +988,7 @@ function ResumeParserPage({
       ) : (
         <div className="quest-card p-8 text-center">
           <h3 className="text-xl font-black text-slate-900">等待简历解析</h3>
-          <p className="mt-2 text-sm text-slate-500">上传文件后点击“开始解析”，这里会展示真实识别出的基础信息、经历、推荐岗位和准备建议。如果暂时没有可复制文字的 PDF/DOCX，可以点击“使用示例简历测试”体验完整流程。</p>
+          <p className="mt-2 text-sm text-slate-500">粘贴简历文本后点击“AI 解析简历”，这里会展示识别出的基础信息、经历、推荐岗位和准备建议。没有文本时可以点击“随机生成模拟履历”体验完整流程。</p>
         </div>
       )}
     </section>
@@ -1079,65 +1016,6 @@ function buildMockInterviewQuestions(profile: CandidateProfile) {
   ];
 }
 
-function ResumeUploadCard({ candidate, onResumeUpload, compact = false }: { candidate: Candidate; onResumeUpload: (file: File) => void; compact?: boolean }) {
-  const statusText: Record<Candidate["resumeAnalysisStatus"], string> = {
-    not_uploaded: "待上传",
-    analyzing: "AI 解析中",
-    completed: "解析完成",
-    failed: "解析失败，请重新上传"
-  };
-
-  return (
-    <div className="quest-card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="text-sm font-black text-blue-600">我的简历</div>
-          <h2 className="mt-1 text-2xl font-black text-slate-900">一键上传简历</h2>
-          <p className="mt-2 text-sm text-slate-500">支持可复制文字的 PDF / DOCX。上传后，YOU鹅 会真实提取简历文本并生成岗位方向、优化建议和面试准备建议。</p>
-        </div>
-        <label className="task-button cursor-pointer">
-          选择文件
-          <input
-            type="file"
-            accept=".pdf,.docx,.txt"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) onResumeUpload(file);
-              event.currentTarget.value = "";
-            }}
-          />
-        </label>
-      </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
-        <InfoPanel title="解析状态" text={statusText[candidate.resumeAnalysisStatus ?? "not_uploaded"]} />
-        <InfoPanel title="文件名" text={candidate.resumeFileName ?? "暂未上传"} />
-        <InfoPanel title="上传时间" text={candidate.resumeUploadedAt ?? "待上传"} />
-      </div>
-      {candidate.resumeAnalysisStatus === "analyzing" && (
-        <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm font-bold text-blue-700">AI 正在分析简历...</div>
-      )}
-      {candidate.resumeAnalysisStatus === "completed" && candidate.resumeAnalysis && !compact && (
-        <div className="mt-5 grid gap-4 xl:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h3 className="font-black text-slate-900">简历亮点总结</h3>
-            <p className="mt-2 text-sm leading-6 text-slate-500">{candidate.resumeAnalysis.summary}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {candidate.resumeAnalysis.strengths.map((item) => <span key={item} className="badge border-blue-200 bg-blue-50 text-blue-700">{item}</span>)}
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h3 className="font-black text-slate-900">优化与准备建议</h3>
-            <div className="mt-2 space-y-2 text-sm text-slate-500">
-              {candidate.resumeAnalysis.optimizationTips.concat(candidate.resumeAnalysis.interviewTips).map((item) => <p key={item}>• {item}</p>)}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function candidateFriendlyStage(stage: NonNullable<Candidate["activeApplicationStage"]>) {
   const labels: Record<NonNullable<Candidate["activeApplicationStage"]>, string> = {
     none: "暂无主推进流程",
@@ -1158,7 +1036,7 @@ function candidateNextStep(candidate: Candidate) {
   if (candidate.activeApplicationStage === "passed") return "等待后续沟通，你可以提前整理入职时间和材料。";
   if (candidate.activeApplicationStage === "onboarded") return "流程已完成，祝你新的阶段顺利。";
   if (candidate.activeApplicationStage === "cancelled" || candidate.activeApplicationStage === "rejected") return "当前流程已结束，你可以关注其他推荐岗位。";
-  return "你可以先上传简历，YOU鹅 会帮你分析更适合的岗位方向。";
+  return "你可以先完成简历解析，YOU鹅 会帮你分析更适合的岗位方向。";
 }
 
 function sortSlots(slots: string[]) {
@@ -2003,7 +1881,7 @@ function AIChatPanel({ chat, sendChat, candidate, profile }: { chat: { from: str
         <h2 className="mt-4 text-2xl font-black text-slate-900">YOU鹅 AI 助手</h2>
         <p className="mt-2 text-sm text-slate-500">会结合你的简历，帮你分析适合岗位、优化表达，并生成面试准备建议。</p>
         <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">
-          简历状态：{profile ? `已解析 ${profile.name}｜${profile.school}｜${profile.major}` : candidate.resumeAnalysisStatus === "analyzing" ? "AI 解析中" : "请先在左侧「解析简历」上传简历"}
+          简历状态：{profile ? `已解析 ${profile.name}｜${profile.school}｜${profile.major}` : candidate.resumeAnalysisStatus === "analyzing" ? "AI 解析中" : "请先在「解析简历」中粘贴文本，或随机生成模拟履历"}
         </div>
         {profile && <p className="mt-4 text-left text-sm leading-6 text-slate-500">当前推荐方向：{profile.recommendedJobs.map((job) => `${job.title}（${job.matchLevel}）`).join("、")}</p>}
       </div>
@@ -2029,7 +1907,7 @@ function CandidateDetail({ role, candidate, onClose }: { role: Role; candidate: 
     const analysis = candidate.resumeAnalysis;
     const processNotes = [
       `当前阶段：${candidateFriendlyStage(candidate.activeApplicationStage ?? "none")}`,
-      candidate.resumeFileName ? `已上传简历：${candidate.resumeFileName}` : "尚未上传简历",
+      candidate.resumeAnalysis ? "已完成简历解析" : "尚未完成简历解析",
       candidate.interviewHistory.length ? `面试记录：${candidate.interviewHistory.join("、")}` : "当前暂无已确认面试"
     ];
     return (
@@ -2081,7 +1959,7 @@ function CandidateDetail({ role, candidate, onClose }: { role: Role; candidate: 
                   </div>
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-slate-500">请先上传简历，YOU鹅 会帮你整理适合岗位方向和优化建议。</p>
+                <p className="mt-2 text-sm text-slate-500">请先在「解析简历」中粘贴简历文本，或随机生成一份模拟履历。</p>
               )}
             </div>
             <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">

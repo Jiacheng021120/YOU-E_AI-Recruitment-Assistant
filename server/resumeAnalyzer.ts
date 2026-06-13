@@ -39,17 +39,16 @@ export function normalizeCandidateProfile(profile: Record<string, unknown>): Can
 }
 
 export async function analyzeResumeWithDeepSeek({
-  fileName,
   resumeText,
   targetJobs = []
 }: {
-  fileName: string;
+  fileName?: string;
   resumeText: string;
   targetJobs?: Pick<Job, "id" | "title" | "department" | "jd" | "requiredSkills">[];
 }) {
   const cleanedResumeText = resumeText.replace(/\s+\n/g, "\n").trim();
   if (cleanedResumeText.length < 20) {
-    throw new Error("简历文本太少，可能是扫描版 PDF 或图片简历。请粘贴可复制的简历文本，或上传可复制文字的 PDF/DOCX。");
+    throw new Error("简历文本太少。请粘贴完整简历文本，或使用随机生成模拟履历体验功能。");
   }
 
   const jobs = targetJobs.length ? targetJobs : [
@@ -89,7 +88,7 @@ export async function analyzeResumeWithDeepSeek({
       },
       {
         role: "user",
-        content: `请解析以下简历并返回严格 JSON，必须符合 schema：\n${schema}\n\n候选岗位列表：\n${JSON.stringify(jobs, null, 2)}\n\n文件名：${fileName}\n\n简历文本：\n${cleanedResumeText.slice(0, 18000)}`
+        content: `请解析以下简历并返回严格 JSON，必须符合 schema：\n${schema}\n\n候选岗位列表：\n${JSON.stringify(jobs, null, 2)}\n\n简历文本：\n${cleanedResumeText.slice(0, 18000)}`
       }
     ]
   });

@@ -1,17 +1,16 @@
-﻿YOU鹅 DeepSeek 全量 AI 更新文件
+﻿YOU鹅 候选人端“解析简历”更新文件
 
 上传方式：
 1. 将本文件夹内的文件按相同目录结构覆盖到 GitHub 仓库根目录。
-2. 不需要上传 .env.local，也不要上传任何真实 API Key。
-3. Vercel 需要配置环境变量：DEEPSEEK_API_KEY、DEEPSEEK_BASE_URL、DEEPSEEK_MODEL。
-4. 上传后在 Vercel 重新部署。
+2. 本次不需要删除整个项目，也不需要上传 .env.local。
+3. 覆盖后在 Vercel 重新部署即可。
 
-本次包含：
-- 服务端 DeepSeek 统一工具 server/deepseek.ts
-- 简历解析服务端逻辑 server/resumeAnalyzer.ts
-- /api/resume/analyze
-- /api/interview/questions
-- /api/interview/notify
-- /api/interview/feedback
-- 前端候选人简历文本解析入口与 AI 状态看板
-- DeepSeek 失败时自动 fallback，并提示“当前 DeepSeek 暂不可用，已使用模拟结果。”
+本次修改：
+- 删除候选人端解析简历页的文件上传入口和文件解析 UI。
+- 改为“粘贴简历文本”调用 /api/resume/analyze 进行 DeepSeek 解析。
+- 新增“随机生成模拟履历”，包含产品运营、数据分析、前端开发、HR 招聘、用户增长 5 套模板。
+- 空文本点击 AI 解析时提示用户粘贴文本或随机生成模拟履历。
+- AI 助手继续读取 yougoose_candidate_profile，并基于解析/模拟履历回答。
+
+验证：
+- 已执行 npm run build，构建通过。

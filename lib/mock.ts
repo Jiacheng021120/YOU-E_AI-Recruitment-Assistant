@@ -243,6 +243,60 @@ export function parseResumeMock(fileName = "候选人简历.pdf"): CandidateProf
   };
 }
 
+const randomCandidateProfiles: CandidateProfile[] = [
+  parseResumeMock("产品运营示例简历.pdf"),
+  parseResumeMock("data-analysis-demo-resume.pdf"),
+  parseResumeMock("frontend-react-demo-resume.pdf"),
+  {
+    name: "周若宁",
+    school: "中国人民大学",
+    major: "人力资源管理",
+    education: "本科",
+    city: "北京",
+    graduationYear: "2026",
+    internships: ["互联网公司招聘运营实习", "校园招聘项目助理"],
+    projects: ["校招候选人体验优化", "面试流程数据复盘", "雇主品牌社群运营"],
+    skills: ["招聘流程", "候选人沟通", "Excel", "数据复盘", "结构化面试"],
+    targetRoles: ["HR 招聘实习生", "招聘运营实习生", "产品运营实习生"],
+    resumeSummary: "候选人具备招聘运营和校招项目经历，熟悉候选人沟通、面试流程推进和基础数据复盘，适合优先关注 HR 招聘和招聘运营方向。",
+    strengths: ["招聘流程理解较完整", "有候选人沟通和流程推进经验", "能通过数据复盘优化流程"],
+    weaknesses: ["建议补充更多业务协同案例", "可量化候选人转化和响应效率", "需要强化复杂问题处理案例"],
+    optimizationTips: ["补充参与招聘项目的候选人规模和转化结果", "突出与业务方、面试官协同推进的经历", "将招聘工具、数据表和流程优化方法写得更具体"],
+    interviewTips: ["准备一次候选人沟通难题案例", "复盘一次招聘流程优化项目", "提前梳理对 HRBP、招聘运营和业务协作的理解"],
+    recommendedJobs: [
+      { id: "j1", title: "产品运营实习生", department: "产品增长", matchLevel: "中等", reason: "具备流程推进和用户沟通能力，但产品增长项目证据需要补充。" },
+      { id: "j5", title: "用户增长实习生", department: "市场增长", matchLevel: "中等", reason: "社群运营和沟通经验可迁移，但增长实验经验较少。" },
+      { id: "j3", title: "内容运营实习生", department: "内容生态", matchLevel: "较高", reason: "雇主品牌和社群运营经历与内容运营、用户沟通有较强相关性。" }
+    ]
+  },
+  {
+    name: "顾南星",
+    school: "南京大学",
+    major: "市场营销",
+    education: "本科",
+    city: "深圳",
+    graduationYear: "2027",
+    internships: ["增长运营实习", "品牌活动运营助理"],
+    projects: ["新用户拉新活动复盘", "渠道投放转化分析", "会员留存策略实验"],
+    skills: ["用户增长", "活动运营", "A/B 测试", "渠道分析", "文案策划"],
+    targetRoles: ["用户增长实习生", "产品运营实习生", "内容运营实习生"],
+    resumeSummary: "候选人具备用户增长、活动运营和渠道分析经验，能围绕拉新、转化和留存设计活动并进行复盘，适合优先关注用户增长和产品运营方向。",
+    strengths: ["增长目标意识明确", "有活动设计与复盘闭环", "能结合渠道数据优化策略"],
+    weaknesses: ["建议补充更多实验设计细节", "可进一步量化投放 ROI 和留存变化", "需要强化用户洞察方法"],
+    optimizationTips: ["把增长项目拆成目标、策略、实验、结果四段", "补充渠道转化率、留存率和成本变化", "突出自己负责的具体模块和决策依据"],
+    interviewTips: ["准备一个完整增长实验案例", "复盘一次活动效果不及预期的调整过程", "梳理对目标用户、渠道和转化漏斗的理解"],
+    recommendedJobs: [
+      { id: "j5", title: "用户增长实习生", department: "市场增长", matchLevel: "高", reason: "拉新、渠道分析和活动复盘经历与岗位要求高度相关。" },
+      { id: "j1", title: "产品运营实习生", department: "产品增长", matchLevel: "较高", reason: "增长实验和用户运营经历可迁移到产品运营工作。" },
+      { id: "j3", title: "内容运营实习生", department: "内容生态", matchLevel: "中等", reason: "具备文案和活动经验，但内容策略案例还可以补充。" }
+    ]
+  }
+];
+
+export function generateRandomCandidateProfile(): CandidateProfile {
+  return randomCandidateProfiles[Math.floor(Math.random() * randomCandidateProfiles.length)];
+}
+
 export const stages: Stage[] = ["talent", "job", "evaluating", "interviewing", "passed", "onboarded"];
 
 export const stageLabel: Record<Stage, string> = {
