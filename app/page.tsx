@@ -6,7 +6,7 @@ import { AppState, Candidate, CandidateProfile, Interviewer, Job, Role, Stage, h
 import { getPersonaAsset } from "@/lib/personaAssets";
 import { interviewerPool } from "@/data/interviewers";
 import type { Interviewer as BusinessInterviewer, ScheduledInterview } from "@/data/interviewers";
-import { callDeepSeek, getDeepSeekText } from "@/lib/deepseekClient";
+import { callDeepSeek, callDeepSeekRoute, getDeepSeekText } from "@/lib/deepseekClient";
 import type { InterviewMatchResult } from "@/lib/interviewMatchingAgent";
 import { matchInterview, rescheduleInterview } from "@/lib/interviewMatchingAgent";
 import { generateInterviewNotifications } from "@/lib/interviewNotificationAgent";
@@ -15,9 +15,22 @@ const storageKey = "you-e-state-v3-candidate-resume";
 const candidateProfileStorageKey = "yougoose_candidate_profile";
 const selectedInterviewerStorageKey = "yougoose_selected_interviewer_id";
 const businessInterviewersStorageKey = "yougoose_business_interviewers";
+const aiStatusStorageKey = "yougoose_ai_status";
+const deepSeekFallbackNotice = "当前 DeepSeek 暂不可用，已使用模拟结果。";
 const week = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const times = ["09:00-10:00", "10:00-11:00", "14:00-15:00", "15:00-16:00", "16:00-17:00"];
 type AppModal = { type: string; candidate?: Candidate; job?: Job; text?: string; matches?: InterviewMatchResult[]; selectedMatchIndex?: number; currentInterviewerId?: string; reason?: string };
+type AiStatusKey = "聊天助手" | "简历解析" | "岗位推荐" | "一键约面通知" | "面试问题生成" | "面评整理";
+type AiSource = "deepseek" | "mock";
+type AiStatusMap = Record<AiStatusKey, AiSource>;
+const defaultAiStatus: AiStatusMap = {
+  聊天助手: "mock",
+  简历解析: "mock",
+  岗位推荐: "mock",
+  一键约面通知: "mock",
+  面试问题生成: "mock",
+  面评整理: "mock"
+};
 
 export default function Home() {
   const [role, setRole] = useState<Role | null>(null);
@@ -27,6 +40,8 @@ export default function Home() {
   const [modal, setModal] = useState<AppModal | null>(null);
   const [candidateProfile, setCandidateProfile] = useState<CandidateProfile | null>(null);
   const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [resumeText, setResumeText] = useState("");
+  const [aiStatus, setAiStatus] = useState<AiStatusMap>(defaultAiStatus);
   const [businessInterviewers, setBusinessInterviewers] = useState<BusinessInterviewer[]>(interviewerPool);
   const [selectedInterviewerId, setSelectedInterviewerId] = useState(interviewerPool[0]?.id ?? "");
   const [chat, setChat] = useState([{ from: "ai", text: "我是 YOU鹅 AI 助手，可以帮你了解流程、分析简历、推荐岗位方向并生成面试准备建议。" }]);
@@ -40,6 +55,8 @@ export default function Home() {
     if (savedInterviewerId) setSelectedInterviewerId(savedInterviewerId);
     const savedInterviewers = localStorage.getItem(businessInterviewersStorageKey);
     if (savedInterviewers) setBusinessInterviewers(normalizeBusinessInterviewers(JSON.parse(savedInterviewers) as BusinessInterviewer[]));
+    const savedAiStatus = localStorage.getItem(aiStatusStorageKey);
+    if (savedAiStatus) setAiStatus({ ...defaultAiStatus, ...JSON.parse(savedAiStatus) });
   }, []);
 
   useEffect(() => {
@@ -57,6 +74,10 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem(businessInterviewersStorageKey, JSON.stringify(businessInterviewers));
   }, [businessInterviewers]);
+
+  useEffect(() => {
+    localStorage.setItem(aiStatusStorageKey, JSON.stringify(aiStatus));
+  }, [aiStatus]);
 
   useEffect(() => {
     const selected = businessInterviewers.find((item) => item.id === selectedInterviewerId);
@@ -92,6 +113,10 @@ export default function Home() {
     setState((current) => ({ ...current, notifications: [text, ...current.notifications].slice(0, 12) }));
   }
 
+  function markAiSource(key: AiStatusKey, source: AiSource) {
+    setAiStatus((current) => ({ ...current, [key]: source }));
+  }
+
   function promoteToEvaluation(candidate: Candidate) {
     updateCandidate(candidate.id, {
       currentStage: "evaluating",
@@ -115,7 +140,7 @@ export default function Home() {
     }, `业务方不通过 ${candidate.name}：经历或方向匹配不足。`);
   }
 
-  function arrangeInterview(candidate: Candidate) {
+  async function arrangeInterview(candidate: Candidate) {
     const job = state.jobs.find((item) => item.title === candidate.appliedRole);
     if (!job) {
       setModal({ type: "info", text: "没有找到候选人对应岗位，无法约面。" });
@@ -131,17 +156,30 @@ export default function Home() {
       setModal({ type: "info", text: "未找到与候选人可面时间重合、且满足职级/方向规则的面试官。请先补充候选人或面试官可面时间。" });
       return;
     }
+    let enrichedMatches = matches;
+    try {
+      enrichedMatches = await Promise.all(matches.map(async (match) => {
+        const interviewer = businessInterviewers.find((item) => item.id === match.interviewerId);
+        if (!interviewer) return match;
+        const questionData = await callDeepSeekRoute<{ questions: string[] }>("/api/interview/questions", { candidate, job, interviewer });
+        return { ...match, questions: questionData.questions?.length ? questionData.questions : match.questions };
+      }));
+      markAiSource("面试问题生成", "deepseek");
+    } catch {
+      markAiSource("面试问题生成", "mock");
+      addNotice(deepSeekFallbackNotice);
+    }
     setModal({
       type: "match",
       candidate,
       job,
-      matches,
+      matches: enrichedMatches,
       selectedMatchIndex: 0,
       text: "一键约面 Agent 已完成真实规则匹配。"
     });
   }
 
-  function confirmReschedule(candidate: Candidate) {
+  async function confirmReschedule(candidate: Candidate) {
     const job = state.jobs.find((item) => item.title === candidate.appliedRole) ?? state.jobs[0];
     const currentInterviewer = interviewerPool.find((item) => item.name === candidate.interviewHistory.find((item) => item.startsWith("面试官："))?.replace("面试官：", "")) ?? interviewerPool[0];
     const result = rescheduleInterview({
@@ -187,6 +225,24 @@ export default function Home() {
         ...current.scheduledInterviews.filter((item) => item.candidateId !== candidate.id || item.status === "已完成")
       ]
     }));
+    let rescheduleMessage = result.reason;
+    try {
+      const notify = await callDeepSeekRoute<{ rescheduleMessage?: string; candidateMessage?: string; interviewerMessage?: string; hrLog?: string }>("/api/interview/notify", {
+        scenario: "改面",
+        candidate,
+        job,
+        interviewer: result.interviewer,
+        slot: result.slot,
+        roundType: "一面",
+        reason: modal?.reason ?? "时间冲突",
+        questions: result.match?.questions ?? []
+      });
+      rescheduleMessage = notify.rescheduleMessage || notify.hrLog || result.reason;
+      markAiSource("一键约面通知", "deepseek");
+    } catch {
+      markAiSource("一键约面通知", "mock");
+      addNotice(deepSeekFallbackNotice);
+    }
     updateCandidate(candidate.id, {
       interviewStatus: "改面已确认",
       pigeonScore: Math.max(0, candidate.pigeonScore - 4),
@@ -194,14 +250,14 @@ export default function Home() {
       interviewHistory: [
         `改面后时间：${result.slot}`,
         `面试官：${result.interviewer.name}`,
-        result.reason,
+        rescheduleMessage,
         ...candidate.interviewHistory
       ]
-    }, `一键改面 Agent 已确认 ${candidate.name} 改面，新安排为 ${result.slot}，面试官：${result.interviewer.name}。项目内通知已同步候选人、HR 和业务方。`);
+    }, `一键改面 Agent 已确认 ${candidate.name} 改面，新安排为 ${result.slot}，面试官：${result.interviewer.name}。${rescheduleMessage}`);
     setModal(null);
   }
 
-  function confirmInterview(candidate: Candidate) {
+  async function confirmInterview(candidate: Candidate) {
     const match = modal?.matches?.[modal.selectedMatchIndex ?? 0];
     const job = modal?.job ?? state.jobs.find((item) => item.title === candidate.appliedRole) ?? state.jobs[0];
     const interviewer = businessInterviewers.find((person) => person.id === match?.interviewerId) ?? businessInterviewers[0];
@@ -227,14 +283,42 @@ export default function Home() {
       ...current,
       scheduledInterviews: [scheduledInterview, ...current.scheduledInterviews.filter((item) => item.id !== scheduledInterview.id)]
     }));
-    const notifications = generateInterviewNotifications({
+    let questions = match?.questions ?? [];
+    let notifications = generateInterviewNotifications({
       candidate,
       job,
       interviewer,
       slot,
       roundType: "一面",
-      questions: match?.questions ?? []
+      questions
     });
+    try {
+      const questionData = await callDeepSeekRoute<{ questions: string[] }>("/api/interview/questions", { candidate, job, interviewer });
+      questions = questionData.questions?.length ? questionData.questions : questions;
+      markAiSource("面试问题生成", "deepseek");
+    } catch {
+      markAiSource("面试问题生成", "mock");
+    }
+    try {
+      const notifyData = await callDeepSeekRoute<typeof notifications>("/api/interview/notify", {
+        scenario: "一键约面",
+        candidate,
+        job,
+        interviewer,
+        slot,
+        roundType: "一面",
+        questions
+      });
+      notifications = {
+        candidateMessage: notifyData.candidateMessage || notifications.candidateMessage,
+        interviewerMessage: notifyData.interviewerMessage || notifications.interviewerMessage,
+        hrLog: notifyData.hrLog || notifications.hrLog
+      };
+      markAiSource("一键约面通知", "deepseek");
+    } catch {
+      markAiSource("一键约面通知", "mock");
+      addNotice(deepSeekFallbackNotice);
+    }
     updateCandidate(candidate.id, {
       currentStage: "interviewing",
       evaluationStatus: "业务通过",
@@ -244,7 +328,7 @@ export default function Home() {
       interviewHistory: [
         `面试时间：${slot}`,
         `面试官：${interviewer.name}`,
-        `面试问题建议：${(match?.questions ?? []).join("；")}`,
+        `面试问题建议：${questions.join("；")}`,
         notifications.candidateMessage,
         notifications.interviewerMessage,
         ...candidate.interviewHistory
@@ -253,14 +337,23 @@ export default function Home() {
     setModal(null);
   }
 
-  function submitFeedback(candidate: Candidate) {
+  async function submitFeedback(candidate: Candidate) {
+    let feedbackSummary = "面试官提交 AI 整理面评：建议通过";
+    try {
+      const feedback = await callDeepSeekRoute<{ summary: string; decision: string; strengths: string[]; risks: string[]; nextRoundFocus: string[] }>("/api/interview/feedback", { candidate });
+      feedbackSummary = `DeepSeek 面评整理：${feedback.summary}｜${feedback.decision}`;
+      markAiSource("面评整理", "deepseek");
+    } catch {
+      markAiSource("面评整理", "mock");
+      addNotice(deepSeekFallbackNotice);
+    }
     updateCandidate(candidate.id, {
       currentStage: "passed",
       interviewStatus: "通过",
       offerStatus: "待 offer",
       gooseScore: Math.min(100, candidate.gooseScore + 8),
       pigeonScore: Math.max(0, candidate.pigeonScore - 3),
-      interviewHistory: ["面试官提交 AI 整理面评：建议通过", ...candidate.interviewHistory]
+      interviewHistory: [feedbackSummary, ...candidate.interviewHistory]
     }, `面试官提交 ${candidate.name} 面评，候选人进入面试通过。`);
   }
 
@@ -314,13 +407,14 @@ export default function Home() {
 
   function applyProfileToCandidate(profile: CandidateProfile, fileName?: string) {
     const primaryJob = profile.recommendedJobs[0];
+    const applicationType = (profile as CandidateProfile & { applicationType?: Candidate["applicationType"] }).applicationType ?? "日常实习";
     updateCandidate("c1", {
       name: profile.name,
       school: profile.school,
       major: profile.major,
       city: profile.city,
       education: profile.education,
-      applicationType: "日常实习",
+      applicationType,
       graduationYear: profile.graduationYear,
       expectedGraduationDate: `${profile.graduationYear}-06`,
       internships: profile.internships.join("、"),
@@ -354,31 +448,46 @@ export default function Home() {
 
   async function startResumeParse() {
     const candidate = state.candidates.find((item) => item.id === "c1") ?? state.candidates[0];
-    const fileName = candidate.resumeFileName ?? "候选人简历.pdf";
-    if (!resumeFile) {
-      updateCandidate("c1", { resumeAnalysisStatus: "failed" }, "真实解析失败：刷新页面后浏览器不会保留文件对象，请重新选择简历文件。");
-      setModal({ type: "info", text: "请重新选择简历文件后再点击“开始解析”。浏览器出于安全限制，刷新后不会保留本地文件内容。" });
+    const pastedText = resumeText.trim();
+    const fileName = candidate.resumeFileName ?? "粘贴简历文本";
+    if (!resumeFile && pastedText.length < 20) {
+      updateCandidate("c1", { resumeAnalysisStatus: "failed" }, "简历解析失败：没有可解析的文件或粘贴文本。");
+      setModal({ type: "info", text: "请上传可复制文字的 PDF/DOCX，或直接粘贴简历文本后再点击“开始解析”。" });
       return;
     }
-    updateCandidate("c1", { resumeAnalysisStatus: "analyzing" }, `YOU鹅 开始解析 ${fileName}。`);
+    updateCandidate("c1", { resumeAnalysisStatus: "analyzing" }, `YOU鹅 开始调用 DeepSeek 解析 ${fileName}。`);
     try {
-      const formData = new FormData();
-      formData.append("resume", resumeFile);
-      const response = await fetch("/api/parse-resume", {
-        method: "POST",
-        body: formData
-      });
-      const data = await response.json();
-      if (!response.ok || !data.profile) {
-        throw new Error(data.error || "真实解析失败，请确认文件是可复制文字的 PDF/DOCX。");
+      let data: { profile?: CandidateProfile };
+      if (pastedText.length >= 20) {
+        data = await callDeepSeekRoute<{ profile: CandidateProfile }>("/api/resume/analyze", {
+          fileName,
+          resumeText: pastedText,
+          targetJobs: state.jobs.map(({ id, title, department, jd, requiredSkills }) => ({ id, title, department, jd, requiredSkills }))
+        });
+      } else {
+        const formData = new FormData();
+        formData.append("resume", resumeFile as File);
+        const response = await fetch("/api/parse-resume", {
+          method: "POST",
+          body: formData
+        });
+        data = await response.json();
+        if (!response.ok) {
+          throw new Error((data as { error?: string; message?: string }).message || (data as { error?: string }).error || "真实解析失败，请确认文件是可复制文字的 PDF/DOCX。");
+        }
       }
+      if (!data.profile) throw new Error("DeepSeek 没有返回结构化简历结果。");
       const profile = data.profile as CandidateProfile;
       setCandidateProfile(profile);
       applyProfileToCandidate(profile, fileName);
+      markAiSource("简历解析", "deepseek");
+      markAiSource("岗位推荐", "deepseek");
     } catch (error) {
       const message = error instanceof Error ? error.message : "真实解析失败，请重新上传。";
+      markAiSource("简历解析", "mock");
+      markAiSource("岗位推荐", "mock");
       updateCandidate("c1", { resumeAnalysisStatus: "failed" }, `真实解析失败：${message}`);
-      setModal({ type: "info", text: `真实解析失败：${message}\n\n建议：上传可复制文字的 PDF 或 DOCX；扫描版 PDF/图片简历暂时无法本地 OCR。` });
+      setModal({ type: "info", text: `${deepSeekFallbackNotice}\n\n解析失败原因：${message}\n\n建议：上传可复制文字的 PDF/DOCX，或把简历正文粘贴到输入框；也可以点击“使用示例简历测试”验证功能链路。` });
     }
   }
 
@@ -394,6 +503,8 @@ export default function Home() {
     const uploadedAt = new Date().toLocaleString("zh-CN", { hour12: false });
     setResumeFile(null);
     setCandidateProfile(profile);
+    markAiSource("简历解析", "mock");
+    markAiSource("岗位推荐", "mock");
     updateCandidate("c1", {
       resumeFileName: `示例简历测试 - ${fileName}`,
       resumeUploadedAt: uploadedAt,
@@ -457,9 +568,11 @@ export default function Home() {
         }
       ]);
       const answer = getDeepSeekText(data) || fallbackAnswer;
+      markAiSource("聊天助手", "deepseek");
       setChat((items) => [...items.slice(0, -1), { from: "ai", text: answer }]);
     } catch {
-      setChat((items) => [...items.slice(0, -1), { from: "ai", text: `当前未连接真实 DeepSeek 模型，已使用模拟 AI 回复。\n\n${fallbackAnswer}` }]);
+      markAiSource("聊天助手", "mock");
+      setChat((items) => [...items.slice(0, -1), { from: "ai", text: `${deepSeekFallbackNotice}\n\n${fallbackAnswer}` }]);
     }
   }
 
@@ -488,9 +601,11 @@ export default function Home() {
               active={active}
               state={state}
               candidateProfile={candidateProfile}
+              resumeText={resumeText}
               chat={chat}
               sendChat={sendChat}
               onResumeUpload={handleResumeUpload}
+              onResumeTextChange={setResumeText}
               onStartResumeParse={startResumeParse}
               onApplyCandidateProfile={applyCandidateProfile}
               onUseDemoProfile={useDemoResumeProfile}
@@ -505,6 +620,7 @@ export default function Home() {
             <HrWorkspace
               active={active}
               state={state}
+              aiStatus={aiStatus}
               promoteToEvaluation={promoteToEvaluation}
               arrangeInterview={arrangeInterview}
               batchPromote={batchPromote}
@@ -641,9 +757,11 @@ function CandidateWorkspace(props: {
   active: string;
   state: AppState;
   candidateProfile: CandidateProfile | null;
+  resumeText: string;
   chat: { from: string; text: string }[];
   sendChat: (text: string) => void | Promise<void>;
   onResumeUpload: (file: File) => void;
+  onResumeTextChange: (value: string) => void;
   onStartResumeParse: () => void;
   onApplyCandidateProfile: () => void;
   onUseDemoProfile: () => void;
@@ -665,7 +783,9 @@ function CandidateWorkspace(props: {
       <ResumeParserPage
         candidate={activeCandidate}
         profile={props.candidateProfile}
+        resumeText={props.resumeText}
         onResumeUpload={props.onResumeUpload}
+        onResumeTextChange={props.onResumeTextChange}
         onStartResumeParse={props.onStartResumeParse}
         onApplyCandidateProfile={props.onApplyCandidateProfile}
         onUseDemoProfile={props.onUseDemoProfile}
@@ -797,14 +917,18 @@ function CandidateWorkspace(props: {
 function ResumeParserPage({
   candidate,
   profile,
+  resumeText,
   onResumeUpload,
+  onResumeTextChange,
   onStartResumeParse,
   onApplyCandidateProfile,
   onUseDemoProfile
 }: {
   candidate: Candidate;
   profile: CandidateProfile | null;
+  resumeText: string;
   onResumeUpload: (file: File) => void;
+  onResumeTextChange: (value: string) => void;
   onStartResumeParse: () => void;
   onApplyCandidateProfile: () => void;
   onUseDemoProfile: () => void;
@@ -815,7 +939,7 @@ function ResumeParserPage({
     completed: profile ? "解析完成" : "未解析",
     failed: "解析失败，请重新上传"
   };
-  const canStart = Boolean(candidate.resumeFileName) && candidate.resumeAnalysisStatus !== "analyzing";
+  const canStart = (Boolean(candidate.resumeFileName) || resumeText.trim().length >= 20) && candidate.resumeAnalysisStatus !== "analyzing";
   return (
     <section className="space-y-5">
       <div className="quest-card p-6">
@@ -823,7 +947,7 @@ function ResumeParserPage({
           <div>
             <h2 className="text-3xl font-black text-slate-900">解析简历</h2>
             <p className="mt-3 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
-              上传可复制文字的 PDF 或 DOCX 简历后，AI 将自动识别你的教育背景、实习经历、项目经历、技能标签，并为你生成岗位匹配建议。
+              上传可复制文字的 PDF / DOCX，或直接粘贴简历文本。DeepSeek 将自动识别教育背景、实习经历、项目经历、技能标签，并生成岗位匹配建议。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -831,7 +955,7 @@ function ResumeParserPage({
               {candidate.resumeFileName ? "重新上传" : "上传简历"}
               <input
                 type="file"
-                accept=".pdf,.docx,.txt"
+              accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
                 className="hidden"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -850,7 +974,17 @@ function ResumeParserPage({
           <InfoPanel title="上传时间" text={candidate.resumeUploadedAt ?? "未上传"} />
           <InfoPanel title="解析状态" text={statusText[candidate.resumeAnalysisStatus ?? "not_uploaded"]} />
         </div>
-        {candidate.resumeAnalysisStatus === "analyzing" && <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm font-bold text-blue-700">AI 正在分析简历...</div>}
+        <div className="mt-5">
+          <div className="mb-2 text-sm font-black text-slate-800">粘贴简历文本</div>
+          <textarea
+            value={resumeText}
+            onChange={(event) => onResumeTextChange(event.target.value)}
+            placeholder="如果 PDF/DOCX 无法提取真实文字，请把可复制的简历正文粘贴在这里。正式解析会优先使用这里的文本调用 DeepSeek。"
+            className="min-h-36 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+          />
+          <p className="mt-2 text-xs font-bold text-slate-500">不上传可复制文本也可以点击“使用示例简历测试”体验完整流程；该入口会标记为 Mock。</p>
+        </div>
+        {candidate.resumeAnalysisStatus === "analyzing" && <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm font-bold text-blue-700">DeepSeek 正在解析简历……</div>}
       </div>
 
       {profile ? (
@@ -1114,8 +1248,9 @@ function normalizeScheduledInterviews(interviews: unknown): ScheduledInterview[]
 function HrWorkspace(props: {
   active: string;
   state: AppState;
+  aiStatus: AiStatusMap;
   promoteToEvaluation: (candidate: Candidate) => void;
-  arrangeInterview: (candidate: Candidate) => void;
+  arrangeInterview: (candidate: Candidate) => void | Promise<void>;
   batchPromote: () => void;
   aiPhone: (candidate: Candidate) => void;
   onboard: (candidate: Candidate) => void;
@@ -1129,7 +1264,7 @@ function HrWorkspace(props: {
   if (props.active === "面试中") return <InterviewProgressList {...props} />;
   if (props.active === "面试通过") return <OfferPassedList {...props} />;
   if (props.active === "已入职") return <OnboardedList {...props} />;
-  return <DataDashboard state={props.state} />;
+  return <DataDashboard state={props.state} aiStatus={props.aiStatus} />;
 }
 
 function TalentPool({ state, aiPhone, setSelectedCandidate }: Pick<Parameters<typeof HrWorkspace>[0], "state" | "aiPhone" | "setSelectedCandidate">) {
@@ -1235,7 +1370,7 @@ function BusinessWorkspace(props: {
   setInterviewers: React.Dispatch<React.SetStateAction<BusinessInterviewer[]>>;
   businessPass: (candidate: Candidate) => void;
   businessReject: (candidate: Candidate) => void;
-  submitFeedback: (candidate: Candidate) => void;
+  submitFeedback: (candidate: Candidate) => void | Promise<void>;
   updateCandidate: (id: string, patch: Partial<Candidate>, log?: string) => void;
   setSelectedCandidate: (candidate: Candidate) => void;
   setModal: (modal: AppModal | null) => void;
@@ -1575,7 +1710,7 @@ function BusinessSchedulePanel({ interviewer, onSave }: { interviewer: BusinessI
   );
 }
 
-function DataDashboard({ state, business = false }: { state: AppState; business?: boolean }) {
+function DataDashboard({ state, aiStatus = defaultAiStatus, business = false }: { state: AppState; aiStatus?: AiStatusMap; business?: boolean }) {
   const avgGoose = Math.round(state.candidates.reduce((sum, c) => sum + c.gooseScore, 0) / state.candidates.length);
   const avgPigeon = Math.round(state.candidates.reduce((sum, c) => sum + c.pigeonScore, 0) / state.candidates.length);
   const funnel = stages.map((stage) => [stageLabel[stage], state.candidates.filter((candidate) => candidate.currentStage === stage).length] as const);
@@ -1622,11 +1757,50 @@ function DataDashboard({ state, business = false }: { state: AppState; business?
             </p>
             <p className="mt-2 rounded-lg bg-blue-50 p-3 text-xs font-bold text-blue-700">{mockAIResponse("一键约面改面 Agent")}</p>
           </div>
+          <AiModelStatusPanel aiStatus={aiStatus} />
           <ProcessComparisonDiagram />
           <PersonaMatrixDiagram />
         </>
       )}
     </section>
+  );
+}
+
+function AiModelStatusPanel({ aiStatus }: { aiStatus: AiStatusMap }) {
+  const items: Array<[AiStatusKey, string]> = [
+    ["聊天助手", "候选人/HR/业务方聊天问答"],
+    ["简历解析", "简历结构化识别"],
+    ["岗位推荐", "基于简历和 JD 的岗位匹配"],
+    ["一键约面通知", "约面/改面沟通文案"],
+    ["面试问题生成", "按履历、岗位和面试官生成问题"],
+    ["面评整理", "结构化面试反馈总结"]
+  ];
+  return (
+    <div className="quest-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-xl font-black text-slate-900">AI 模型接入状态</h3>
+          <p className="mt-1 text-sm font-semibold text-slate-500">状态基于最近一次调用结果记录；DeepSeek 不可用时页面会自动 fallback。</p>
+        </div>
+        <span className="badge border-blue-200 bg-blue-50 text-blue-700">服务端 /api/* 安全代理</span>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {items.map(([key, desc]) => {
+          const isDeepSeek = aiStatus[key] === "deepseek";
+          return (
+            <div key={key} className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-black text-slate-900">{key}</div>
+                <span className={`badge ${isDeepSeek ? "border-blue-200 bg-blue-50 text-blue-700" : "border-orange-200 bg-orange-50 text-orange-700"}`}>
+                  {isDeepSeek ? "DeepSeek 已接入" : "Mock"}
+                </span>
+              </div>
+              <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">{desc}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

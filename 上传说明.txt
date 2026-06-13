@@ -1,16 +1,17 @@
-﻿这份压缩包只包含本次需要覆盖上传到 GitHub 的更新文件。
+﻿YOU鹅 DeepSeek 全量 AI 更新文件
 
-使用方式：
-1. 解压本 ZIP。
-2. 将里面的文件按相同目录覆盖到你的 GitHub 仓库项目根目录。
-3. 不要上传 .env.local、node_modules、.next。
-4. Vercel 部署时，在 Project Settings -> Environment Variables 配置：
-   DEEPSEEK_API_KEY=你的 DeepSeek Key
-   DEEPSEEK_BASE_URL=https://api.deepseek.com
-   DEEPSEEK_MODEL=deepseek-chat
-5. 保存环境变量后重新 Redeploy。
+上传方式：
+1. 将本文件夹内的文件按相同目录结构覆盖到 GitHub 仓库根目录。
+2. 不需要上传 .env.local，也不要上传任何真实 API Key。
+3. Vercel 需要配置环境变量：DEEPSEEK_API_KEY、DEEPSEEK_BASE_URL、DEEPSEEK_MODEL。
+4. 上传后在 Vercel 重新部署。
 
-注意：
-- next.config.mjs 已调整为 Vercel API Route 可运行模式。
-- 前端只会请求 /api/deepseek，不会暴露 DeepSeek API Key。
-- app/api/parse-resume/route.ts 用于 Vercel 上的真实简历解析。
+本次包含：
+- 服务端 DeepSeek 统一工具 server/deepseek.ts
+- 简历解析服务端逻辑 server/resumeAnalyzer.ts
+- /api/resume/analyze
+- /api/interview/questions
+- /api/interview/notify
+- /api/interview/feedback
+- 前端候选人简历文本解析入口与 AI 状态看板
+- DeepSeek 失败时自动 fallback，并提示“当前 DeepSeek 暂不可用，已使用模拟结果。”
