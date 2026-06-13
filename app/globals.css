@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --brand-blue: #1677ff;
+  --brand-blue-dark: #1e6fff;
+  --brand-blue-soft: #eaf3ff;
+  --page-bg: #f5f7fa;
+  --card-bg: #ffffff;
+  --text-main: #1f2937;
+  --text-muted: #6b7280;
+  --border: #e5e7eb;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--page-bg);
+  color: var(--text-main);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+@layer components {
+  .quest-card {
+    @apply rounded-2xl border border-slate-200 bg-white shadow-[0_8px_24px_rgba(31,41,55,.06)];
+  }
+
+  .task-button {
+    @apply rounded-lg border border-blue-600 bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 active:translate-y-px;
+  }
+
+  .danger-button {
+    @apply rounded-lg border border-red-500 bg-red-500 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-red-600;
+  }
+
+  .ghost-button {
+    @apply rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700;
+  }
+
+  .badge {
+    @apply rounded-full border px-2.5 py-1 text-xs font-bold;
+  }
+}
+
+.map-grid {
+  background: var(--page-bg);
+}
+
+.floaty {
+  animation: floaty 4s ease-in-out infinite;
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.quest-card .text-white,
+.quest-card.text-white {
+  color: var(--text-main);
+}
+
+.quest-card .text-slate-200,
+.quest-card .text-slate-300,
+.quest-card .text-slate-400 {
+  color: var(--text-muted);
+}
+
+.quest-card .text-cyan-100,
+.quest-card .text-cyan-50 {
+  color: var(--brand-blue);
+}
+
+.quest-card .text-gold {
+  color: var(--warning);
+}
+
+.quest-card .text-goose {
+  color: var(--success);
+}
+
+.quest-card .text-pigeon {
+  color: var(--danger);
+}
+
+.quest-card input,
+.quest-card select,
+.quest-card textarea {
+  color: var(--text-main);
+}
